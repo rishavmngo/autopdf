@@ -29,16 +29,42 @@ class CSVMappingDialog(tk.Toplevel):
         
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         
-        # Main frame
-        main_frame = tk.Frame(self, bg="#2b2b2b", padx=20, pady=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Configure ttk style for buttons
+        style = ttk.Style()
+        style.configure("Save.TButton", font=("Arial", 11, "bold"), padding=10)
+        style.configure("Cancel.TButton", font=("Arial", 10), padding=5)
         
-        # Header
+        # ========== BUTTONS AT TOP FOR VISIBILITY ==========
+        top_btn_frame = tk.Frame(self, bg="#2b2b2b", padx=20, pady=15)
+        top_btn_frame.pack(fill=tk.X)
+        
         tk.Label(
-            main_frame,
+            top_btn_frame,
             text="Map each placeholder to a CSV column:",
             bg="#2b2b2b", fg="white", font=("Arial", 11, "bold")
-        ).pack(anchor=tk.W, pady=(0, 15))
+        ).pack(side=tk.LEFT)
+        
+        # Save and Cancel buttons on the right
+        ttk.Button(
+            top_btn_frame,
+            text="Cancel",
+            style="Cancel.TButton",
+            command=self._on_cancel
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        
+        ttk.Button(
+            top_btn_frame,
+            text="✓ Save Mapping",
+            style="Save.TButton",
+            command=self._on_ok
+        ).pack(side=tk.RIGHT)
+        
+        # Separator line
+        tk.Frame(self, bg="#404040", height=2).pack(fill=tk.X)
+        
+        # Main content frame
+        main_frame = tk.Frame(self, bg="#2b2b2b", padx=20, pady=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Scrollable frame for mappings
         canvas_frame = tk.Frame(main_frame, bg="#2b2b2b")
@@ -100,27 +126,14 @@ class CSVMappingDialog(tk.Toplevel):
             
             self.combos[placeholder] = combo
         
-        # Buttons
-        btn_frame = tk.Frame(main_frame, bg="#2b2b2b")
-        btn_frame.pack(fill=tk.X, pady=(20, 0))
-        
-        tk.Button(
-            btn_frame, text="Cancel", command=self._on_cancel,
-            bg="#3c3c3c", fg="white", width=10
-        ).pack(side=tk.RIGHT)
-        
-        tk.Button(
-            btn_frame, text="Apply Mapping", command=self._on_ok,
-            bg="#4a9eff", fg="white", width=12
-        ).pack(side=tk.RIGHT, padx=(0, 10))
-        
         # Bind Escape key
         self.bind("<Escape>", lambda e: self._on_cancel())
         
-        # Size window based on content
+        # Set window size
         self.update_idletasks()
-        width = max(500, self.mappings_frame.winfo_reqwidth() + 60)
-        height = min(500, self.mappings_frame.winfo_reqheight() + 150)
+        width = max(550, self.mappings_frame.winfo_reqwidth() + 80)
+        height = min(400, self.mappings_frame.winfo_reqheight() + 120)
+        height = max(250, height)
         self.geometry(f"{width}x{height}")
         
         # Center on parent
@@ -133,7 +146,7 @@ class CSVMappingDialog(tk.Toplevel):
         self.geometry(f"{width}x{height}+{x}+{y}")
     
     def _on_ok(self) -> None:
-        """Handle OK button click."""
+        """Handle Save button click."""
         self.result = {}
         
         for placeholder, combo in self.combos.items():
@@ -150,7 +163,6 @@ class CSVMappingDialog(tk.Toplevel):
     
     def show(self) -> Optional[dict[str, str]]:
         """Show dialog and return mapping result."""
-        # Wait for window to be visible before grabbing
         self.wait_visibility()
         self.grab_set()
         self.focus_force()
