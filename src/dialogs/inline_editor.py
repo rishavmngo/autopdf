@@ -3,7 +3,9 @@
 import tkinter as tk
 from tkinter import ttk, colorchooser
 from typing import Optional, Callable, Tuple
-from ..placeholder import Placeholder
+from ..placeholder import (
+    Placeholder, PLACEHOLDER_TYPE_COLUMN, PLACEHOLDER_TYPE_STATIC, PLACEHOLDER_TYPE_SERIAL
+)
 from ..pdf_generator import FONT_DISPLAY_NAMES
 
 
@@ -21,14 +23,14 @@ class InlineEditor(tk.Frame):
         self.on_change = on_change
         self.on_delete = on_delete
         self.current_placeholder: Optional[Placeholder] = None
-        self._updating = False  # Prevent recursive updates
+        self._updating = False
         
         self._create_ui()
         self.hide()
     
     def _create_ui(self) -> None:
         """Create the editor UI."""
-        # Header with title and close button
+        # Header
         header = tk.Frame(self, bg="#4a9eff")
         header.pack(fill=tk.X)
         
@@ -45,28 +47,75 @@ class InlineEditor(tk.Frame):
             font=("Arial", 10), padx=8
         ).pack(side=tk.RIGHT)
         
-        # Main content
-        content = tk.Frame(self, bg="#3a3a3a", padx=10, pady=10)
+        # Content container
+        content = tk.Frame(self, bg="#3a3a3a", padx=10, pady=8)
         content.pack(fill=tk.BOTH, expand=True)
         
         label_style = {"bg": "#3a3a3a", "fg": "white", "font": ("Arial", 9)}
         
-        # Name field
-        name_frame = tk.Frame(content, bg="#3a3a3a")
-        name_frame.pack(fill=tk.X, pady=(0, 8))
+        # Type selection row
+        type_frame = tk.Frame(content, bg="#3a3a3a")
+        type_frame.pack(fill=tk.X, pady=(0, 6))
         
-        tk.Label(name_frame, text="Name:", width=6, anchor=tk.W, **label_style).pack(side=tk.LEFT)
+        tk.Label(type_frame, text="Type:", width=6, anchor=tk.W, **label_style).pack(side=tk.LEFT)
+        self.type_var = tk.StringVar(value=PLACEHOLDER_TYPE_COLUMN)
+        
+        types = [
+            (PLACEHOLDER_TYPE_COLUMN, "Column"),
+            (PLACEHOLDER_TYPE_STATIC, "Static"),
+            (PLACEHOLDER_TYPE_SERIAL, "Serial#")
+        ]
+        for val, label in types:
+            tk.Radiobutton(
+                type_frame, text=label, variable=self.type_var, value=val,
+                bg="#3a3a3a", fg="white", selectcolor="#2b2b2b",
+                activebackground="#3a3a3a", activeforeground="white",
+                command=self._on_type_change
+            ).pack(side=tk.LEFT, padx=2)
+        
+        # Container for type-specific fields (using grid in a single row)
+        self.type_fields_container = tk.Frame(content, bg="#3a3a3a")
+        self.type_fields_container.pack(fill=tk.X, pady=(0, 6))
+        
+        # Name label + entry (column type)
+        self.name_label = tk.Label(self.type_fields_container, text="Name:", **label_style)
         self.name_var = tk.StringVar()
         self.name_entry = tk.Entry(
-            name_frame, textvariable=self.name_var,
-            bg="#2b2b2b", fg="white", insertbackground="white", width=20
+            self.type_fields_container, textvariable=self.name_var,
+            bg="#2b2b2b", fg="white", insertbackground="white", width=16
         )
-        self.name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.name_var.trace_add("write", lambda *args: self._on_field_change())
+        
+        # Static text label + entry
+        self.static_label = tk.Label(self.type_fields_container, text="Text:", **label_style)
+        self.static_var = tk.StringVar()
+        self.static_entry = tk.Entry(
+            self.type_fields_container, textvariable=self.static_var,
+            bg="#2b2b2b", fg="white", insertbackground="white", width=16
+        )
+        self.static_var.trace_add("write", lambda *args: self._on_field_change())
+        
+        # Serial prefix + start
+        self.prefix_label = tk.Label(self.type_fields_container, text="Prefix:", **label_style)
+        self.serial_prefix_var = tk.StringVar()
+        self.serial_prefix_entry = tk.Entry(
+            self.type_fields_container, textvariable=self.serial_prefix_var,
+            bg="#2b2b2b", fg="white", insertbackground="white", width=5
+        )
+        self.serial_prefix_var.trace_add("write", lambda *args: self._on_field_change())
+        
+        self.start_label = tk.Label(self.type_fields_container, text="Start:", **label_style)
+        self.serial_start_var = tk.StringVar(value="1")
+        self.serial_start_spin = tk.Spinbox(
+            self.type_fields_container, from_=0, to=99999, increment=1,
+            textvariable=self.serial_start_var, width=5,
+            bg="#2b2b2b", fg="white",
+            command=self._on_field_change
+        )
         
         # Position controls
         pos_frame = tk.Frame(content, bg="#3a3a3a")
-        pos_frame.pack(fill=tk.X, pady=(0, 8))
+        pos_frame.pack(fill=tk.X, pady=(0, 6))
         
         tk.Label(pos_frame, text="X:", **label_style).pack(side=tk.LEFT)
         self.x_var = tk.StringVar()
@@ -76,9 +125,8 @@ class InlineEditor(tk.Frame):
             bg="#2b2b2b", fg="white",
             command=self._on_field_change
         )
-        self.x_spin.pack(side=tk.LEFT, padx=(2, 10))
+        self.x_spin.pack(side=tk.LEFT, padx=(2, 8))
         self.x_spin.bind("<Return>", lambda e: self._on_field_change())
-        self.x_spin.bind("<FocusOut>", lambda e: self._on_field_change())
         
         tk.Label(pos_frame, text="Y:", **label_style).pack(side=tk.LEFT)
         self.y_var = tk.StringVar()
@@ -89,22 +137,20 @@ class InlineEditor(tk.Frame):
             command=self._on_field_change
         )
         self.y_spin.pack(side=tk.LEFT, padx=2)
-        self.y_spin.bind("<Return>", lambda e: self._on_field_change())
-        self.y_spin.bind("<FocusOut>", lambda e: self._on_field_change())
         
-        # Nudge buttons
+        # Nudge buttons - 1px steps
         nudge_frame = tk.Frame(pos_frame, bg="#3a3a3a")
         nudge_frame.pack(side=tk.RIGHT)
         
         btn_style = {"bg": "#2b2b2b", "fg": "white", "width": 2, "font": ("Arial", 8)}
-        tk.Button(nudge_frame, text="◀", command=lambda: self._nudge(-5, 0), **btn_style).pack(side=tk.LEFT)
-        tk.Button(nudge_frame, text="▲", command=lambda: self._nudge(0, -5), **btn_style).pack(side=tk.LEFT)
-        tk.Button(nudge_frame, text="▼", command=lambda: self._nudge(0, 5), **btn_style).pack(side=tk.LEFT)
-        tk.Button(nudge_frame, text="▶", command=lambda: self._nudge(5, 0), **btn_style).pack(side=tk.LEFT)
+        tk.Button(nudge_frame, text="◀", command=lambda: self._nudge(-1, 0), **btn_style).pack(side=tk.LEFT)
+        tk.Button(nudge_frame, text="▲", command=lambda: self._nudge(0, -1), **btn_style).pack(side=tk.LEFT)
+        tk.Button(nudge_frame, text="▼", command=lambda: self._nudge(0, 1), **btn_style).pack(side=tk.LEFT)
+        tk.Button(nudge_frame, text="▶", command=lambda: self._nudge(1, 0), **btn_style).pack(side=tk.LEFT)
         
         # Font and size
         font_frame = tk.Frame(content, bg="#3a3a3a")
-        font_frame.pack(fill=tk.X, pady=(0, 8))
+        font_frame.pack(fill=tk.X, pady=(0, 6))
         
         tk.Label(font_frame, text="Font:", width=6, anchor=tk.W, **label_style).pack(side=tk.LEFT)
         self.font_var = tk.StringVar()
@@ -113,9 +159,9 @@ class InlineEditor(tk.Frame):
             textvariable=self.font_var,
             values=list(FONT_DISPLAY_NAMES.keys()),
             state="readonly",
-            width=10
+            width=8
         )
-        self.font_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.font_combo.pack(side=tk.LEFT, padx=(0, 8))
         self.font_combo.bind("<<ComboboxSelected>>", lambda e: self._on_field_change())
         
         tk.Label(font_frame, text="Size:", **label_style).pack(side=tk.LEFT)
@@ -127,12 +173,10 @@ class InlineEditor(tk.Frame):
             command=self._on_field_change
         )
         self.size_spin.pack(side=tk.LEFT, padx=2)
-        self.size_spin.bind("<Return>", lambda e: self._on_field_change())
-        self.size_spin.bind("<FocusOut>", lambda e: self._on_field_change())
         
         # Color picker
         color_frame = tk.Frame(content, bg="#3a3a3a")
-        color_frame.pack(fill=tk.X, pady=(0, 8))
+        color_frame.pack(fill=tk.X, pady=(0, 6))
         
         tk.Label(color_frame, text="Color:", width=6, anchor=tk.W, **label_style).pack(side=tk.LEFT)
         self.color_btn = tk.Button(
@@ -149,7 +193,7 @@ class InlineEditor(tk.Frame):
         
         # Delete button
         btn_frame = tk.Frame(content, bg="#3a3a3a")
-        btn_frame.pack(fill=tk.X, pady=(5, 0))
+        btn_frame.pack(fill=tk.X, pady=(3, 0))
         
         tk.Button(
             btn_frame, text="🗑 Delete",
@@ -160,13 +204,41 @@ class InlineEditor(tk.Frame):
         # Store color
         self.selected_color = (0, 0, 0)
     
+    def _show_type_fields(self, ptype: str) -> None:
+        """Show the appropriate fields for the placeholder type."""
+        # Clear all widgets from container
+        for widget in self.type_fields_container.winfo_children():
+            widget.pack_forget()
+        
+        if ptype == PLACEHOLDER_TYPE_COLUMN:
+            self.name_label.pack(side=tk.LEFT)
+            self.name_entry.pack(side=tk.LEFT, padx=(2, 0), fill=tk.X, expand=True)
+        elif ptype == PLACEHOLDER_TYPE_STATIC:
+            self.static_label.pack(side=tk.LEFT)
+            self.static_entry.pack(side=tk.LEFT, padx=(2, 0), fill=tk.X, expand=True)
+        elif ptype == PLACEHOLDER_TYPE_SERIAL:
+            self.prefix_label.pack(side=tk.LEFT)
+            self.serial_prefix_entry.pack(side=tk.LEFT, padx=(2, 8))
+            self.start_label.pack(side=tk.LEFT)
+            self.serial_start_spin.pack(side=tk.LEFT, padx=2)
+    
+    def _on_type_change(self) -> None:
+        """Handle type selection change."""
+        ptype = self.type_var.get()
+        self._show_type_fields(ptype)
+        self._on_field_change()
+    
     def show(self, placeholder: Placeholder) -> None:
         """Show editor with placeholder data."""
         self._updating = True
         self.current_placeholder = placeholder
         
-        self.title_label.config(text=f"Edit: {placeholder.get_display_name()}")
+        self.title_label.config(text="Edit Placeholder")
+        self.type_var.set(placeholder.placeholder_type)
         self.name_var.set(placeholder.name)
+        self.static_var.set(placeholder.static_value)
+        self.serial_prefix_var.set(placeholder.serial_prefix)
+        self.serial_start_var.set(str(placeholder.serial_start))
         self.x_var.set(f"{placeholder.x:.1f}")
         self.y_var.set(f"{placeholder.y:.1f}")
         self.font_var.set(placeholder.font_name)
@@ -178,6 +250,10 @@ class InlineEditor(tk.Frame):
         self.color_label.config(text=color_hex)
         
         self._updating = False
+        
+        # Show correct fields based on type
+        self._show_type_fields(placeholder.placeholder_type)
+        
         self.pack(fill=tk.X, pady=(0, 10))
     
     def hide(self) -> None:
@@ -186,7 +262,7 @@ class InlineEditor(tk.Frame):
         self.pack_forget()
     
     def _nudge(self, dx: float, dy: float) -> None:
-        """Move position by delta."""
+        """Move position by delta (1px steps)."""
         if not self.current_placeholder:
             return
         
@@ -207,11 +283,24 @@ class InlineEditor(tk.Frame):
             return
         
         try:
-            # Update placeholder from fields
-            name = self.name_var.get().strip()
-            if name:
-                name = name.replace("{", "").replace("}", "")
-                self.current_placeholder.name = name
+            ptype = self.type_var.get()
+            self.current_placeholder.placeholder_type = ptype
+            
+            if ptype == PLACEHOLDER_TYPE_COLUMN:
+                name = self.name_var.get().strip()
+                if name:
+                    name = name.replace("{", "").replace("}", "")
+                    self.current_placeholder.name = name
+            elif ptype == PLACEHOLDER_TYPE_STATIC:
+                self.current_placeholder.static_value = self.static_var.get()
+                self.current_placeholder.name = f"static_{id(self.current_placeholder)}"
+            elif ptype == PLACEHOLDER_TYPE_SERIAL:
+                self.current_placeholder.serial_prefix = self.serial_prefix_var.get()
+                try:
+                    self.current_placeholder.serial_start = int(self.serial_start_var.get())
+                except ValueError:
+                    self.current_placeholder.serial_start = 1
+                self.current_placeholder.name = f"serial_{id(self.current_placeholder)}"
             
             self.current_placeholder.x = float(self.x_var.get())
             self.current_placeholder.y = float(self.y_var.get())
@@ -219,7 +308,6 @@ class InlineEditor(tk.Frame):
             self.current_placeholder.font_size = float(self.size_var.get())
             self.current_placeholder.font_color = self.selected_color
             
-            # Notify callback to refresh view
             if self.on_change:
                 self.on_change(self.current_placeholder)
         except ValueError:

@@ -5,6 +5,12 @@ from typing import Optional
 import json
 
 
+# Placeholder types
+PLACEHOLDER_TYPE_COLUMN = "column"  # Maps to CSV column
+PLACEHOLDER_TYPE_STATIC = "static"  # Static text
+PLACEHOLDER_TYPE_SERIAL = "serial"  # Serial number (row index)
+
+
 @dataclass
 class Placeholder:
     """Represents a placeholder on a PDF page."""
@@ -16,10 +22,27 @@ class Placeholder:
     font_name: str = "helv"  # Default Helvetica
     font_size: float = 12.0
     font_color: tuple = field(default_factory=lambda: (0, 0, 0))  # RGB, 0-1 range
+    placeholder_type: str = PLACEHOLDER_TYPE_COLUMN  # Type of placeholder
+    static_value: str = ""  # Value for static type
+    serial_prefix: str = ""  # Prefix for serial number
+    serial_start: int = 1  # Starting number for serial
     
     def get_display_name(self) -> str:
         """Return the placeholder name with curly braces for display."""
+        if self.placeholder_type == PLACEHOLDER_TYPE_STATIC:
+            return self.static_value or f"[Static: {self.name}]"
+        elif self.placeholder_type == PLACEHOLDER_TYPE_SERIAL:
+            return f"#{self.serial_prefix}"
         return f"{{{{{self.name}}}}}"
+    
+    def get_value(self, row_index: int, row_data: dict) -> str:
+        """Get the value for this placeholder for a given row."""
+        if self.placeholder_type == PLACEHOLDER_TYPE_STATIC:
+            return self.static_value
+        elif self.placeholder_type == PLACEHOLDER_TYPE_SERIAL:
+            return f"{self.serial_prefix}{self.serial_start + row_index}"
+        else:
+            return row_data.get(self.name, "")
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -30,7 +53,11 @@ class Placeholder:
             "y": self.y,
             "font_name": self.font_name,
             "font_size": self.font_size,
-            "font_color": list(self.font_color)
+            "font_color": list(self.font_color),
+            "placeholder_type": self.placeholder_type,
+            "static_value": self.static_value,
+            "serial_prefix": self.serial_prefix,
+            "serial_start": self.serial_start
         }
     
     @classmethod
@@ -39,6 +66,15 @@ class Placeholder:
         data = data.copy()
         if "font_color" in data:
             data["font_color"] = tuple(data["font_color"])
+        # Handle old format without type fields
+        if "placeholder_type" not in data:
+            data["placeholder_type"] = PLACEHOLDER_TYPE_COLUMN
+        if "static_value" not in data:
+            data["static_value"] = ""
+        if "serial_prefix" not in data:
+            data["serial_prefix"] = ""
+        if "serial_start" not in data:
+            data["serial_start"] = 1
         return cls(**data)
 
 
@@ -72,8 +108,8 @@ class PlaceholderManager:
         return [p for p in self.placeholders if p.page == page]
     
     def get_all_names(self) -> list[str]:
-        """Get list of all placeholder names."""
-        return [p.name for p in self.placeholders]
+        """Get list of all placeholder names (only for column type)."""
+        return [p.name for p in self.placeholders if p.placeholder_type == PLACEHOLDER_TYPE_COLUMN]
     
     def clear(self) -> None:
         """Remove all placeholders."""

@@ -218,18 +218,58 @@ class PDFTemplateApp:
         self.pattern_entry.pack(fill=tk.X, pady=2)
         
         tk.Label(
-            pattern_frame, text="Use {index} or placeholder names like {first_name}",
+            pattern_frame, text="Use {index} or {column_name}",
             bg="#2b2b2b", fg="#666666", font=("Arial", 8)
         ).pack(anchor=tk.W)
         
+        # Row range controls
+        range_frame = tk.Frame(sidebar, bg="#2b2b2b")
+        range_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(
+            range_frame, text="Row range:",
+            bg="#2b2b2b", fg="#888888", font=("Arial", 9)
+        ).pack(anchor=tk.W)
+        
+        range_inputs = tk.Frame(range_frame, bg="#2b2b2b")
+        range_inputs.pack(fill=tk.X)
+        
+        tk.Label(range_inputs, text="Start:", bg="#2b2b2b", fg="white", font=("Arial", 9)).pack(side=tk.LEFT)
+        self.start_row_var = tk.StringVar(value="1")
+        self.start_row_entry = tk.Entry(
+            range_inputs, textvariable=self.start_row_var,
+            bg="#3c3c3c", fg="white", insertbackground="white", width=6
+        )
+        self.start_row_entry.pack(side=tk.LEFT, padx=(2, 10))
+        
+        tk.Label(range_inputs, text="End:", bg="#2b2b2b", fg="white", font=("Arial", 9)).pack(side=tk.LEFT)
+        self.end_row_var = tk.StringVar(value="")
+        self.end_row_entry = tk.Entry(
+            range_inputs, textvariable=self.end_row_var,
+            bg="#3c3c3c", fg="white", insertbackground="white", width=6
+        )
+        self.end_row_entry.pack(side=tk.LEFT, padx=2)
+        
+        tk.Label(
+            range_frame, text="Leave End empty for all rows",
+            bg="#2b2b2b", fg="#666666", font=("Arial", 8)
+        ).pack(anchor=tk.W)
+        
+        # Preview button
+        tk.Button(
+            sidebar, text="👁 Preview Sample",
+            command=self._preview_pdf,
+            bg="#3c3c3c", fg="white", font=("Arial", 10)
+        ).pack(fill=tk.X, padx=10, pady=5)
+        
         # Generate button
         self.generate_btn = tk.Button(
-            sidebar, text="🚀 Generate All PDFs",
+            sidebar, text="🚀 Generate PDFs",
             command=self._generate_pdfs,
             bg="#4a9eff", fg="white", font=("Arial", 11, "bold"),
             pady=10
         )
-        self.generate_btn.pack(fill=tk.X, padx=10, pady=15)
+        self.generate_btn.pack(fill=tk.X, padx=10, pady=10)
     
     def _create_status_bar(self) -> None:
         """Create the status bar."""
@@ -448,8 +488,45 @@ class PDFTemplateApp:
                 self._set_status("No columns mapped")
     
     # PDF Generation
+    def _preview_pdf(self) -> None:
+        """Generate a preview PDF with placeholder names."""
+        if not self.template.pdf_path:
+            messagebox.showwarning("No PDF", "Please open a PDF first.")
+            return
+        
+        if not self.template.placeholder_manager.placeholders:
+            messagebox.showwarning("No Placeholders", "Please add placeholders first.")
+            return
+        
+        # Ask where to save preview
+        output_path = filedialog.asksaveasfilename(
+            title="Save Preview PDF",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+            initialfile="preview.pdf"
+        )
+        
+        if not output_path:
+            return
+        
+        try:
+            generator = PDFGenerator(
+                self.template.pdf_path,
+                self.template.placeholder_manager,
+                self.csv_handler
+            )
+            generator.generate_preview(output_path)
+            self._set_status(f"Preview saved: {os.path.basename(output_path)}")
+            
+            # Ask if user wants to open it
+            if messagebox.askyesno("Preview Created", "Open the preview PDF?"):
+                import subprocess
+                subprocess.Popen(["xdg-open", output_path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create preview: {e}")
+    
     def _generate_pdfs(self) -> None:
-        """Generate PDFs for all CSV rows."""
+        """Generate PDFs for CSV rows."""
         # Validate
         if not self.template.pdf_path:
             messagebox.showwarning("No PDF", "Please open a PDF first.")
@@ -467,13 +544,21 @@ class PDFTemplateApp:
         if self.csv_handler.mapping is None or (not self.csv_handler.mapping and self.csv_handler.file_path):
             self._auto_map_columns()
         
-        if not self.csv_handler.mapping:
-            messagebox.showwarning(
-                "No Mapping", 
-                "No columns are mapped to placeholders.\n"
-                "Please click 'Map Columns' to configure the mapping."
-            )
-            return
+        # Get row range
+        try:
+            start_row = int(self.start_row_var.get()) - 1  # Convert to 0-indexed
+            start_row = max(0, start_row)
+        except ValueError:
+            start_row = 0
+        
+        end_row_str = self.end_row_var.get().strip()
+        if end_row_str:
+            try:
+                end_row = int(end_row_str)  # Keep as 1-indexed for user, convert in generator
+            except ValueError:
+                end_row = None
+        else:
+            end_row = None
         
         # Get output directory
         output_dir = filedialog.askdirectory(title="Select Output Directory")
@@ -484,6 +569,11 @@ class PDFTemplateApp:
         pattern = self.pattern_entry.get().strip()
         if not pattern:
             pattern = "output_{index}.pdf"
+        
+        # Calculate how many PDFs
+        total_rows = self.csv_handler.get_row_count()
+        actual_end = total_rows if end_row is None else min(end_row, total_rows)
+        count = actual_end - start_row
         
         # Create progress window
         progress_window = tk.Toplevel(self.root)
@@ -502,7 +592,7 @@ class PDFTemplateApp:
         progress_var = tk.DoubleVar()
         progress_bar = ttk.Progressbar(
             progress_window, variable=progress_var,
-            maximum=self.csv_handler.get_row_count()
+            maximum=count
         )
         progress_bar.pack(fill=tk.X, padx=20, pady=10)
         
@@ -527,7 +617,9 @@ class PDFTemplateApp:
             generated = generator.generate_batch(
                 output_dir,
                 pattern,
-                progress_callback=update_progress
+                progress_callback=update_progress,
+                start_row=start_row,
+                end_row=end_row
             )
             
             progress_window.destroy()

@@ -3,7 +3,7 @@
 import os
 import fitz  # PyMuPDF
 from typing import Callable, Optional
-from .placeholder import Placeholder, PlaceholderManager
+from .placeholder import Placeholder, PlaceholderManager, PLACEHOLDER_TYPE_COLUMN
 from .csv_handler import CSVHandler
 
 
@@ -48,7 +48,8 @@ class PDFGenerator:
         
         # Process each placeholder
         for placeholder in self.placeholder_manager.placeholders:
-            value = row_data.get(placeholder.name, "")
+            # Use the placeholder's get_value method which handles all types
+            value = placeholder.get_value(row_index, row_data)
             if not value:
                 continue
             
@@ -72,30 +73,72 @@ class PDFGenerator:
         doc.save(output_path)
         doc.close()
     
+    def generate_preview(self, output_path: str) -> None:
+        """Generate a preview PDF with placeholder names as text (without braces)."""
+        doc = fitz.open(self.pdf_path)
+        
+        for placeholder in self.placeholder_manager.placeholders:
+            # For preview, show the name without braces
+            if placeholder.placeholder_type == PLACEHOLDER_TYPE_COLUMN:
+                value = placeholder.name
+            else:
+                # For static/serial, show actual value
+                value = placeholder.get_value(0, {})
+            
+            if not value:
+                continue
+            
+            page = doc[placeholder.page]
+            
+            color = placeholder.font_color
+            if any(c > 1 for c in color):
+                color = tuple(c / 255 for c in color)
+            
+            page.insert_text(
+                point=(placeholder.x, placeholder.y),
+                text=value,
+                fontname=placeholder.font_name,
+                fontsize=placeholder.font_size,
+                color=color
+            )
+        
+        doc.save(output_path)
+        doc.close()
+    
     def generate_batch(
         self,
         output_dir: str,
         filename_pattern: str = "output_{index}.pdf",
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        start_row: int = 0,
+        end_row: Optional[int] = None
     ) -> list[str]:
         """
-        Generate PDFs for all rows in the CSV.
+        Generate PDFs for a range of rows in the CSV.
         
         Args:
             output_dir: Directory to save generated PDFs
             filename_pattern: Pattern for output filenames. 
                              Use {index} for row number, or {column_name} for CSV values
             progress_callback: Function called with (current, total) for progress updates
+            start_row: First row to process (0-indexed)
+            end_row: Last row to process (exclusive), None for all rows
         
         Returns:
             List of generated file paths
         """
         os.makedirs(output_dir, exist_ok=True)
         
-        generated_files = []
-        total = self.csv_handler.get_row_count()
+        total_rows = self.csv_handler.get_row_count()
         
-        for i in range(total):
+        # Calculate range
+        start = max(0, min(start_row, total_rows))
+        end = total_rows if end_row is None else min(end_row, total_rows)
+        
+        generated_files = []
+        count = end - start
+        
+        for idx, i in enumerate(range(start, end)):
             # Generate filename
             filename = filename_pattern.replace("{index}", str(i + 1))
             
@@ -114,6 +157,6 @@ class PDFGenerator:
             
             # Report progress
             if progress_callback:
-                progress_callback(i + 1, total)
+                progress_callback(idx + 1, count)
         
         return generated_files
