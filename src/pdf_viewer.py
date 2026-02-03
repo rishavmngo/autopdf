@@ -209,7 +209,8 @@ class PDFViewer:
             canvas_y = self.page_offset_y + (p.y * self.zoom)
             
             # Calculate preview font size (scaled by zoom)
-            preview_size = max(8, int(p.font_size * self.zoom))
+            # PDF points are smaller than Tkinter pixels, apply 0.75 correction factor
+            preview_size = max(6, int(p.font_size * self.zoom * 0.75))
             
             # Convert color
             if any(c > 1 for c in p.font_color):

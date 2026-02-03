@@ -255,6 +255,16 @@ class PDFTemplateApp:
             bg="#2b2b2b", fg="#666666", font=("Arial", 8)
         ).pack(anchor=tk.W)
         
+        # Merge option
+        self.merge_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            sidebar, text="Merge all into single PDF",
+            variable=self.merge_var,
+            bg="#2b2b2b", fg="white", selectcolor="#3c3c3c",
+            activebackground="#2b2b2b", activeforeground="white",
+            font=("Arial", 9)
+        ).pack(fill=tk.X, padx=10, pady=5)
+        
         # Preview button
         tk.Button(
             sidebar, text="👁 Preview Sample",
@@ -622,12 +632,30 @@ class PDFTemplateApp:
                 end_row=end_row
             )
             
-            progress_window.destroy()
+            # Merge if requested
+            if self.merge_var.get() and len(generated) > 1:
+                progress_label.config(text="Merging PDFs...")
+                progress_window.update()
+                
+                merged_path = os.path.join(output_dir, "merged_output.pdf")
+                generator.merge_pdfs(generated, merged_path)
+                
+                progress_window.destroy()
+                
+                messagebox.showinfo(
+                    "Complete",
+                    f"Generated {len(generated)} PDFs.\n\n"
+                    f"Merged into: merged_output.pdf\n"
+                    f"Location: {output_dir}"
+                )
+            else:
+                progress_window.destroy()
+                
+                messagebox.showinfo(
+                    "Complete",
+                    f"Successfully generated {len(generated)} PDFs in:\n{output_dir}"
+                )
             
-            messagebox.showinfo(
-                "Complete",
-                f"Successfully generated {len(generated)} PDFs in:\n{output_dir}"
-            )
             self._set_status(f"Generated {len(generated)} PDFs")
             
         except Exception as e:

@@ -160,3 +160,22 @@ class PDFGenerator:
                 progress_callback(idx + 1, count)
         
         return generated_files
+    
+    def merge_pdfs(self, pdf_files: list[str], output_path: str) -> None:
+        """
+        Merge multiple PDFs into a single file.
+        
+        Args:
+            pdf_files: List of PDF file paths to merge
+            output_path: Path for the merged output PDF
+        """
+        merged_doc = fitz.open()
+        
+        for pdf_path in pdf_files:
+            doc = fitz.open(pdf_path)
+            merged_doc.insert_pdf(doc)
+            doc.close()
+        
+        merged_doc.save(output_path)
+        merged_doc.close()
+
