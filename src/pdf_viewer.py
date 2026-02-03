@@ -16,7 +16,7 @@ class PDFViewer:
         parent: tk.Widget,
         placeholder_manager: PlaceholderManager,
         on_click: Optional[Callable[[int, float, float], None]] = None,
-        on_placeholder_edit: Optional[Callable[[Placeholder], None]] = None,
+        on_placeholder_select: Optional[Callable[[Placeholder], None]] = None,
         on_placeholder_move: Optional[Callable[[Placeholder, float, float], None]] = None
     ):
         """
@@ -25,26 +25,29 @@ class PDFViewer:
         Args:
             parent: Parent tkinter widget
             placeholder_manager: Manager for placeholders
-            on_click: Callback when PDF is clicked (page, x, y)
-            on_placeholder_edit: Callback when placeholder is double-clicked
-            on_placeholder_move: Callback when placeholder is dragged (placeholder, new_x, new_y)
+            on_click: Callback when PDF empty area is clicked (page, x, y)
+            on_placeholder_select: Callback when placeholder is clicked
+            on_placeholder_move: Callback when placeholder is dragged
         """
         self.parent = parent
         self.placeholder_manager = placeholder_manager
         self.on_click = on_click
-        self.on_placeholder_edit = on_placeholder_edit
+        self.on_placeholder_select = on_placeholder_select
         self.on_placeholder_move = on_placeholder_move
         
         self.doc: Optional[fitz.Document] = None
         self.current_page = 0
-        self.zoom = 1.0
+        self.zoom = 1.5  # Higher default zoom for accuracy
         self.page_image: Optional[ImageTk.PhotoImage] = None
-        self.placeholder_items: dict[int, Placeholder] = {}  # canvas item ID -> Placeholder
+        self.placeholder_items: dict[int, Placeholder] = {}
+        self.selected_placeholder: Optional[Placeholder] = None
         
-        # Drag state
+        # Drag state - track the initial PDF position, not canvas position
         self.dragging_placeholder: Optional[Placeholder] = None
-        self.drag_start_x = 0
-        self.drag_start_y = 0
+        self.drag_initial_pdf_x = 0
+        self.drag_initial_pdf_y = 0
+        self.drag_start_canvas_x = 0
+        self.drag_start_canvas_y = 0
         
         # Create main frame
         self.frame = tk.Frame(parent, bg="#2b2b2b")
@@ -106,7 +109,7 @@ class PDFViewer:
         ).pack(side=tk.LEFT)
         
         self.zoom_label = tk.Label(
-            zoom_frame, text="100%", bg="#2b2b2b", fg="white", width=5
+            zoom_frame, text="150%", bg="#2b2b2b", fg="white", width=5
         )
         self.zoom_label.pack(side=tk.LEFT, padx=5)
         
@@ -119,11 +122,12 @@ class PDFViewer:
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
-        self.canvas.bind("<Double-Button-1>", self._on_double_click)
         
         # Store page offset for coordinate calculation
         self.page_offset_x = 0
         self.page_offset_y = 0
+        self.page_width = 0
+        self.page_height = 0
     
     def pack(self, **kwargs):
         """Pack the viewer frame."""
@@ -140,6 +144,7 @@ class PDFViewer:
         
         self.doc = fitz.open(path)
         self.current_page = 0
+        self.selected_placeholder = None
         self._render_page()
     
     def _render_page(self) -> None:
@@ -148,6 +153,10 @@ class PDFViewer:
             return
         
         page = self.doc[self.current_page]
+        
+        # Store original page dimensions
+        self.page_width = page.rect.width
+        self.page_height = page.rect.height
         
         # Create pixmap with zoom
         mat = fitz.Matrix(self.zoom, self.zoom)
@@ -189,11 +198,9 @@ class PDFViewer:
         self.zoom_label.config(text=f"{int(self.zoom * 100)}%")
     
     def _draw_placeholders(self) -> None:
-        """Draw placeholder markers on the canvas with live preview."""
-        # Clear mapping
+        """Draw placeholder markers with accurate positioning preview."""
         self.placeholder_items.clear()
         
-        # Get placeholders for current page
         placeholders = self.placeholder_manager.get_for_page(self.current_page)
         
         for p in placeholders:
@@ -201,8 +208,8 @@ class PDFViewer:
             canvas_x = self.page_offset_x + (p.x * self.zoom)
             canvas_y = self.page_offset_y + (p.y * self.zoom)
             
-            # Calculate font size for preview (scaled)
-            preview_size = max(8, int(p.font_size * self.zoom * 0.8))
+            # Calculate preview font size (scaled by zoom)
+            preview_size = max(8, int(p.font_size * self.zoom))
             
             # Convert color
             if any(c > 1 for c in p.font_color):
@@ -210,53 +217,67 @@ class PDFViewer:
             else:
                 color = f"#{int(p.font_color[0]*255):02x}{int(p.font_color[1]*255):02x}{int(p.font_color[2]*255):02x}"
             
-            # Display text - show the placeholder name as preview
             display_text = p.get_display_name()
             
-            # Create draggable text with styling
-            # Background for visibility
+            # Check if selected
+            is_selected = (p == self.selected_placeholder)
+            outline_color = "#ffff00" if is_selected else "#4a9eff"
+            outline_width = 3 if is_selected else 2
+            
+            # Create text - NO BOLD, use regular font to match PDF output
             text_id = self.canvas.create_text(
                 canvas_x, canvas_y,
                 text=display_text,
-                anchor=tk.SW,  # Bottom-left anchor to match PDF text positioning
+                anchor=tk.SW,  # Bottom-left to match PDF baseline positioning
                 fill=color,
-                font=("Arial", preview_size, "bold"),
+                font=("Helvetica", preview_size),  # Removed "bold"
                 tags=("placeholder", f"ph_{p.name}")
             )
             
             # Get text bounds for background
             bbox = self.canvas.bbox(text_id)
             if bbox:
-                # Create semi-transparent background
+                # Selection/highlight box
                 bg_id = self.canvas.create_rectangle(
-                    bbox[0] - 2, bbox[1] - 1,
-                    bbox[2] + 2, bbox[3] + 1,
-                    fill="#ffffff", outline="#4a9eff", width=2,
-                    stipple="gray50",
+                    bbox[0] - 3, bbox[1] - 2,
+                    bbox[2] + 3, bbox[3] + 2,
+                    fill="#4a9eff" if is_selected else "",
+                    stipple="gray50" if is_selected else "",
+                    outline=outline_color,
+                    width=outline_width,
                     tags=("placeholder_bg", f"ph_{p.name}")
                 )
-                # Raise text above background
                 self.canvas.tag_raise(text_id, bg_id)
-                
-                # Map both items to placeholder
                 self.placeholder_items[bg_id] = p
             
             self.placeholder_items[text_id] = p
+            
+            # Draw a small crosshair at the exact anchor point for accuracy
+            cross_size = 4
+            self.canvas.create_line(
+                canvas_x - cross_size, canvas_y,
+                canvas_x + cross_size, canvas_y,
+                fill="#ff6b6b", width=1, tags=("crosshair", f"ph_{p.name}")
+            )
+            self.canvas.create_line(
+                canvas_x, canvas_y - cross_size,
+                canvas_x, canvas_y + cross_size,
+                fill="#ff6b6b", width=1, tags=("crosshair", f"ph_{p.name}")
+            )
     
     def _find_placeholder_at(self, x: float, y: float) -> Optional[Placeholder]:
         """Find placeholder at canvas coordinates."""
         items = self.canvas.find_overlapping(x - 5, y - 5, x + 5, y + 5)
-        for item_id in items:
+        for item_id in reversed(items):  # Check top items first
             if item_id in self.placeholder_items:
                 return self.placeholder_items[item_id]
         return None
     
     def _on_canvas_click(self, event: tk.Event) -> None:
-        """Handle click on canvas - either start drag or add new placeholder."""
+        """Handle click on canvas."""
         if not self.doc:
             return
         
-        # Get canvas coordinates
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
         
@@ -264,21 +285,36 @@ class PDFViewer:
         placeholder = self._find_placeholder_at(canvas_x, canvas_y)
         
         if placeholder:
-            # Start dragging
+            # Select this placeholder
+            self.selected_placeholder = placeholder
+            
+            # Setup for dragging - store the INITIAL PDF position
             self.dragging_placeholder = placeholder
-            self.drag_start_x = canvas_x
-            self.drag_start_y = canvas_y
-            self.canvas.config(cursor="fleur")  # Move cursor
+            self.drag_initial_pdf_x = placeholder.x
+            self.drag_initial_pdf_y = placeholder.y
+            self.drag_start_canvas_x = canvas_x
+            self.drag_start_canvas_y = canvas_y
+            
+            self.canvas.config(cursor="fleur")
+            
+            # Redraw to show selection (but don't reset drag state)
+            self._render_page()
+            
+            # Notify selection callback
+            if self.on_placeholder_select:
+                self.on_placeholder_select(placeholder)
         else:
-            # Convert to PDF coordinates and trigger new placeholder
+            # Clear selection and drag state
+            self.selected_placeholder = None
+            self.dragging_placeholder = None
+            self._render_page()
+            
+            # Convert to PDF coordinates for new placeholder
             pdf_x = (canvas_x - self.page_offset_x) / self.zoom
             pdf_y = (canvas_y - self.page_offset_y) / self.zoom
             
             # Check if within page bounds
-            page = self.doc[self.current_page]
-            rect = page.rect
-            
-            if 0 <= pdf_x <= rect.width and 0 <= pdf_y <= rect.height:
+            if 0 <= pdf_x <= self.page_width and 0 <= pdf_y <= self.page_height:
                 if self.on_click:
                     self.on_click(self.current_page, pdf_x, pdf_y)
     
@@ -290,69 +326,54 @@ class PDFViewer:
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
         
-        # Calculate delta
-        dx = canvas_x - self.drag_start_x
-        dy = canvas_y - self.drag_start_y
+        # Calculate delta from the original start position
+        delta_canvas_x = canvas_x - self.drag_start_canvas_x
+        delta_canvas_y = canvas_y - self.drag_start_canvas_y
         
-        # Move all items with this placeholder's tag
-        tag = f"ph_{self.dragging_placeholder.name}"
-        self.canvas.move(tag, dx, dy)
+        # Convert delta to PDF coordinates
+        delta_pdf_x = delta_canvas_x / self.zoom
+        delta_pdf_y = delta_canvas_y / self.zoom
         
-        # Also move background
-        for item_id, p in self.placeholder_items.items():
-            if p == self.dragging_placeholder:
-                tags = self.canvas.gettags(item_id)
-                if "placeholder_bg" in tags:
-                    self.canvas.move(item_id, dx, dy)
+        # Calculate new PDF position from initial position + delta
+        new_pdf_x = self.drag_initial_pdf_x + delta_pdf_x
+        new_pdf_y = self.drag_initial_pdf_y + delta_pdf_y
         
-        self.drag_start_x = canvas_x
-        self.drag_start_y = canvas_y
+        # Clamp to page bounds
+        new_pdf_x = max(0, min(new_pdf_x, self.page_width))
+        new_pdf_y = max(0, min(new_pdf_y, self.page_height))
+        
+        # Update placeholder position directly
+        self.dragging_placeholder.x = new_pdf_x
+        self.dragging_placeholder.y = new_pdf_y
+        
+        # Redraw to show new position
+        self._render_page()
     
     def _on_drag_end(self, event: tk.Event) -> None:
         """Handle end of drag."""
         if not self.dragging_placeholder:
             return
         
-        canvas_x = self.canvas.canvasx(event.x)
-        canvas_y = self.canvas.canvasy(event.y)
-        
-        # Convert to PDF coordinates
-        new_x = (canvas_x - self.page_offset_x) / self.zoom
-        new_y = (canvas_y - self.page_offset_y) / self.zoom
-        
-        # Clamp to page bounds
-        if self.doc:
-            page = self.doc[self.current_page]
-            rect = page.rect
-            new_x = max(0, min(new_x, rect.width))
-            new_y = max(0, min(new_y, rect.height))
-        
-        # Update placeholder position
-        self.dragging_placeholder.x = new_x
-        self.dragging_placeholder.y = new_y
-        
-        # Notify callback
+        # Notify callback of final position
         if self.on_placeholder_move:
-            self.on_placeholder_move(self.dragging_placeholder, new_x, new_y)
+            self.on_placeholder_move(
+                self.dragging_placeholder, 
+                self.dragging_placeholder.x, 
+                self.dragging_placeholder.y
+            )
         
         self.dragging_placeholder = None
         self.canvas.config(cursor="")
-        
-        # Refresh to redraw cleanly
-        self._render_page()
     
-    def _on_double_click(self, event: tk.Event) -> None:
-        """Handle double-click to edit placeholder."""
-        if not self.doc:
-            return
+    def highlight_placeholder(self, placeholder: Placeholder) -> None:
+        """Highlight a specific placeholder."""
+        self.selected_placeholder = placeholder
         
-        canvas_x = self.canvas.canvasx(event.x)
-        canvas_y = self.canvas.canvasy(event.y)
+        # Navigate to the page if needed
+        if placeholder.page != self.current_page:
+            self.current_page = placeholder.page
         
-        placeholder = self._find_placeholder_at(canvas_x, canvas_y)
-        
-        if placeholder and self.on_placeholder_edit:
-            self.on_placeholder_edit(placeholder)
+        self._render_page()
     
     def refresh(self) -> None:
         """Refresh the display."""
@@ -362,17 +383,19 @@ class PDFViewer:
         """Go to previous page."""
         if self.doc and self.current_page > 0:
             self.current_page -= 1
+            self.selected_placeholder = None
             self._render_page()
     
     def next_page(self) -> None:
         """Go to next page."""
         if self.doc and self.current_page < len(self.doc) - 1:
             self.current_page += 1
+            self.selected_placeholder = None
             self._render_page()
     
     def zoom_in(self) -> None:
         """Increase zoom level."""
-        if self.zoom < 3.0:
+        if self.zoom < 4.0:
             self.zoom += 0.25
             self._render_page()
     

@@ -10,6 +10,7 @@ from .csv_handler import CSVHandler
 from .pdf_generator import PDFGenerator, FONT_DISPLAY_NAMES
 from .dialogs.placeholder_dialog import PlaceholderDialog
 from .dialogs.csv_mapping_dialog import CSVMappingDialog
+from .dialogs.inline_editor import InlineEditor
 
 
 class PDFTemplateApp:
@@ -89,7 +90,7 @@ class PDFTemplateApp:
             main_container,
             self.template.placeholder_manager,
             on_click=self._on_pdf_click,
-            on_placeholder_edit=self._on_placeholder_double_click,
+            on_placeholder_select=self._on_placeholder_select,
             on_placeholder_move=self._on_placeholder_moved
         )
         self.pdf_viewer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -99,7 +100,7 @@ class PDFTemplateApp:
     
     def _create_sidebar(self, parent: tk.Widget) -> None:
         """Create the right sidebar with placeholder list and controls."""
-        sidebar = tk.Frame(parent, bg="#2b2b2b", width=300)
+        sidebar = tk.Frame(parent, bg="#2b2b2b", width=320)
         sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         sidebar.pack_propagate(False)
         
@@ -112,11 +113,18 @@ class PDFTemplateApp:
         # Instructions
         self.instruction_label = tk.Label(
             sidebar,
-            text="Click on PDF to add placeholder\nDrag to move • Double-click to edit",
+            text="Click on PDF to add • Click placeholder to edit",
             bg="#2b2b2b", fg="#888888", font=("Arial", 9),
             justify=tk.CENTER
         )
         self.instruction_label.pack(fill=tk.X, pady=5)
+        
+        # Inline editor (hidden by default)
+        self.inline_editor = InlineEditor(
+            sidebar,
+            on_change=self._on_inline_editor_change,
+            on_delete=self._on_inline_editor_delete
+        )
         
         # Placeholder list frame
         list_frame = tk.Frame(sidebar, bg="#3c3c3c")
@@ -138,26 +146,16 @@ class PDFTemplateApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.placeholder_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Double-click to edit from list
-        self.placeholder_listbox.bind("<Double-Button-1>", lambda e: self._edit_placeholder())
+        # Click to select and edit
+        self.placeholder_listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
         
         # Placeholder actions
         actions_frame = tk.Frame(sidebar, bg="#2b2b2b")
         actions_frame.pack(fill=tk.X, padx=10, pady=5)
         
         tk.Button(
-            actions_frame, text="Edit", command=self._edit_placeholder,
-            bg="#3c3c3c", fg="white", width=8
-        ).pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(
-            actions_frame, text="Delete", command=self._delete_placeholder,
-            bg="#3c3c3c", fg="white", width=8
-        ).pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(
             actions_frame, text="Clear All", command=self._clear_placeholders,
-            bg="#5a3030", fg="white", width=8
+            bg="#5a3030", fg="white", width=10
         ).pack(side=tk.RIGHT, padx=2)
         
         # Separator
@@ -276,6 +274,7 @@ class PDFTemplateApp:
             self.current_pdf_path = path
             self.template.pdf_path = path
             self.template.placeholder_manager.clear()
+            self.inline_editor.hide()
             self.pdf_viewer.load_pdf(path)
             self._update_placeholder_list()
             self._set_status(f"Opened: {os.path.basename(path)}")
@@ -311,6 +310,7 @@ class PDFTemplateApp:
                 
                 if self.template.is_valid():
                     self.current_pdf_path = self.template.pdf_path
+                    self.inline_editor.hide()
                     self.pdf_viewer.load_pdf(self.template.pdf_path)
                     self._update_placeholder_list()
                     self._set_status(f"Template loaded: {os.path.basename(path)}")
@@ -324,7 +324,8 @@ class PDFTemplateApp:
     
     # Placeholder operations
     def _on_pdf_click(self, page: int, x: float, y: float) -> None:
-        """Handle click on PDF to add placeholder."""
+        """Handle click on empty PDF area to add placeholder."""
+        # Use simple dialog for new placeholder name
         dialog = PlaceholderDialog(self.root, page, x, y)
         result = dialog.show()
         
@@ -342,76 +343,58 @@ class PDFTemplateApp:
             self._update_placeholder_list()
             self.pdf_viewer.refresh()
             self._set_status(f"Added placeholder: {result.get_display_name()}")
+            
+            # Show inline editor for the new placeholder
+            self.inline_editor.show(result)
     
-    def _on_placeholder_double_click(self, placeholder: Placeholder) -> None:
-        """Handle double-click on placeholder in viewer."""
-        # Find index
+    def _on_placeholder_select(self, placeholder: Placeholder) -> None:
+        """Handle placeholder selection in viewer - show inline editor."""
+        self.inline_editor.show(placeholder)
+        
+        # Also select in listbox
         try:
             index = self.template.placeholder_manager.placeholders.index(placeholder)
+            self.placeholder_listbox.selection_clear(0, tk.END)
+            self.placeholder_listbox.selection_set(index)
+            self.placeholder_listbox.see(index)
         except ValueError:
-            return
-        
-        self._edit_placeholder_at_index(index)
+            pass
+    
+    def _on_listbox_select(self, event) -> None:
+        """Handle listbox selection."""
+        selection = self.placeholder_listbox.curselection()
+        if selection:
+            index = selection[0]
+            placeholder = self.template.placeholder_manager.placeholders[index]
+            self.inline_editor.show(placeholder)
+            self.pdf_viewer.highlight_placeholder(placeholder)
     
     def _on_placeholder_moved(self, placeholder: Placeholder, new_x: float, new_y: float) -> None:
         """Handle placeholder drag move."""
         self._update_placeholder_list()
-        self._set_status(f"Moved {placeholder.get_display_name()} to ({new_x:.0f}, {new_y:.0f})")
+        
+        # Update inline editor if showing this placeholder
+        if self.inline_editor.current_placeholder == placeholder:
+            self.inline_editor.show(placeholder)
     
-    def _edit_placeholder(self) -> None:
-        """Edit selected placeholder from list."""
-        selection = self.placeholder_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Select", "Please select a placeholder from the list first.")
-            return
-        
-        self._edit_placeholder_at_index(selection[0])
+    def _on_inline_editor_change(self, placeholder: Placeholder) -> None:
+        """Handle live changes from inline editor."""
+        self._update_placeholder_list()
+        self.pdf_viewer.refresh()
     
-    def _edit_placeholder_at_index(self, index: int) -> None:
-        """Edit placeholder at specific index."""
-        placeholder = self.template.placeholder_manager.placeholders[index]
-        
-        dialog = PlaceholderDialog(
-            self.root,
-            placeholder.page,
-            placeholder.x,
-            placeholder.y,
-            existing=placeholder
-        )
-        result = dialog.show()
-        
-        if result == "DELETE":
-            # Delete was requested
-            self.template.placeholder_manager.remove(placeholder)
-            self._update_placeholder_list()
-            self.pdf_viewer.refresh()
-            self._set_status(f"Deleted placeholder: {placeholder.get_display_name()}")
-        elif result:
-            # Update placeholder
-            self.template.placeholder_manager.placeholders[index] = result
-            self._update_placeholder_list()
-            self.pdf_viewer.refresh()
-            self._set_status(f"Updated placeholder: {result.get_display_name()}")
-    
-    def _delete_placeholder(self) -> None:
-        """Delete selected placeholder."""
-        selection = self.placeholder_listbox.curselection()
-        if not selection:
-            return
-        
-        index = selection[0]
-        placeholder = self.template.placeholder_manager.placeholders[index]
-        
-        if messagebox.askyesno("Delete", f"Delete placeholder '{placeholder.name}'?"):
-            self.template.placeholder_manager.remove(placeholder)
-            self._update_placeholder_list()
-            self.pdf_viewer.refresh()
+    def _on_inline_editor_delete(self, placeholder: Placeholder) -> None:
+        """Handle delete from inline editor."""
+        self.template.placeholder_manager.remove(placeholder)
+        self._update_placeholder_list()
+        self.pdf_viewer.refresh()
+        self._set_status(f"Deleted placeholder")
     
     def _clear_placeholders(self) -> None:
         """Clear all placeholders."""
         if self.template.placeholder_manager.placeholders:
             if messagebox.askyesno("Clear All", "Delete all placeholders?"):
                 self.template.placeholder_manager.clear()
+                self.inline_editor.hide()
                 self._update_placeholder_list()
                 self.pdf_viewer.refresh()
     
@@ -456,7 +439,7 @@ class PDFTemplateApp:
         )
         result = dialog.show()
         
-        if result is not None:  # Could be empty dict, which is valid
+        if result is not None:
             self.csv_handler.set_mapping(result)
             self._update_mapping_label()
             if result:
@@ -480,9 +463,8 @@ class PDFTemplateApp:
             messagebox.showwarning("No CSV Data", "Please import a CSV file first.")
             return
         
-        # Check if mapping has been configured (even if empty after clicking Apply)
+        # Check if mapping has been configured
         if self.csv_handler.mapping is None or (not self.csv_handler.mapping and self.csv_handler.file_path):
-            # Mapping wasn't set or is empty - try auto-mapping
             self._auto_map_columns()
         
         if not self.csv_handler.mapping:
@@ -530,7 +512,6 @@ class PDFTemplateApp:
         )
         progress_label.pack()
         
-        # Generate PDFs
         def update_progress(current: int, total: int):
             progress_var.set(current)
             progress_label.config(text=f"{current} / {total}")
@@ -589,37 +570,31 @@ class PDFTemplateApp:
 
 2. ADD PLACEHOLDERS
    Click anywhere on the PDF to add a placeholder.
-   Enter a name (e.g., 'first_name') and choose formatting.
-   
-   TIP: Drag placeholders to reposition them!
-        Double-click to edit. Use arrow buttons for fine control.
+   The inline editor will appear for live editing.
 
-3. SAVE TEMPLATE
+3. EDIT PLACEHOLDERS
+   - Click a placeholder on PDF or in list to edit
+   - Changes apply live as you type
+   - Use position arrows for precise placement
+   - Drag placeholders directly on the PDF
+
+4. SAVE TEMPLATE
    Save your template (File → Save Template) to reuse later.
 
-4. IMPORT CSV
-   Import a CSV file with data for your placeholders.
-   The first row should contain column headers.
-
-5. MAP COLUMNS
-   Map your CSV columns to the placeholders you created.
-   The app will try to auto-match by name.
+5. IMPORT CSV & MAP
+   Import CSV, then map columns to placeholders.
 
 6. GENERATE PDFs
-   Click 'Generate All PDFs' to create personalized PDFs.
-   Each row in your CSV becomes a separate PDF.
+   Click 'Generate All PDFs' - one per CSV row.
 
 TIPS:
-- Drag placeholders on the PDF to move them
-- Double-click placeholders to edit
-- Use arrow keys in edit dialog for fine positioning
-- Use {index} in filename pattern for row numbers
-- Use placeholder names like {first_name} in patterns
+- Use {index} in filename for row numbers
+- Use {first_name} etc. for data-based names
 """
         
         help_window = tk.Toplevel(self.root)
         help_window.title("How to Use")
-        help_window.geometry("500x550")
+        help_window.geometry("450x450")
         help_window.configure(bg="#2b2b2b")
         
         text = tk.Text(
