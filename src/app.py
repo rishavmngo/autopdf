@@ -108,9 +108,55 @@ class PDFTemplateApp:
 
     def _create_sidebar(self, parent: tk.Widget) -> None:
         """Create the right sidebar with placeholder list and controls."""
-        sidebar = tk.Frame(parent, bg="#2b2b2b", width=320)
-        sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
-        sidebar.pack_propagate(False)
+        # Outer sidebar container
+        sidebar_container = tk.Frame(parent, bg="#2b2b2b", width=320)
+        sidebar_container.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        sidebar_container.pack_propagate(False)
+
+        # Create canvas and scrollbar for scrollable sidebar
+        sidebar_canvas = tk.Canvas(
+            sidebar_container, bg="#2b2b2b", highlightthickness=0, width=300
+        )
+        sidebar_scrollbar = tk.Scrollbar(
+            sidebar_container, orient="vertical", command=sidebar_canvas.yview
+        )
+        sidebar_canvas.configure(yscrollcommand=sidebar_scrollbar.set)
+
+        # Pack scrollbar and canvas
+        sidebar_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        sidebar_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create frame inside canvas to hold all content
+        sidebar = tk.Frame(sidebar_canvas, bg="#2b2b2b")
+        sidebar_window = sidebar_canvas.create_window(
+            (0, 0), window=sidebar, anchor="nw"
+        )
+
+        # Configure canvas scrolling
+        def configure_scroll_region(event):
+            sidebar_canvas.configure(scrollregion=sidebar_canvas.bbox("all"))
+
+        def configure_canvas_width(event):
+            sidebar_canvas.itemconfig(sidebar_window, width=event.width)
+
+        sidebar.bind("<Configure>", configure_scroll_region)
+        sidebar_canvas.bind("<Configure>", configure_canvas_width)
+
+        # Enable mousewheel scrolling
+        def on_mousewheel(event):
+            sidebar_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_mousewheel_linux(event):
+            if event.num == 4:
+                sidebar_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                sidebar_canvas.yview_scroll(1, "units")
+
+        # Bind mousewheel for Windows/macOS
+        sidebar_canvas.bind_all("<MouseWheel>", on_mousewheel)
+        # Bind mousewheel for Linux
+        sidebar_canvas.bind_all("<Button-4>", on_mousewheel_linux)
+        sidebar_canvas.bind_all("<Button-5>", on_mousewheel_linux)
 
         # Title
         tk.Label(
